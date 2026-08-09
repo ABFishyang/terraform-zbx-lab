@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and replace the example values.
+# Never commit terraform.tfvars.
+
+admin_cidr = "203.0.113.10/32"
+
+zabbix_db_password = "CHANGE_ME_123"
+
+# Safe defaults: no NAT Gateway, EC2, or CloudWatch monitoring resources.
+enable_nat_gateway   = false
+create_ec2_instances = false
+enable_monitoring    = false
+
+# Set an email address to receive CloudWatch alarm notifications.
+alarm_email = null
