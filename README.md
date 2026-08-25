@@ -1,4 +1,4 @@
-# Zabbix Lab on AWS with Terraform
+# AWS上のZabbix 7.0監視ラボ（Terraform）
 
 [![Terraform CI](https://github.com/ABFishyang/terraform-zbx-lab/actions/workflows/terraform.yml/badge.svg)](https://github.com/ABFishyang/terraform-zbx-lab/actions/workflows/terraform.yml)
 
@@ -6,9 +6,9 @@ Amazon Linux 2023 上の Zabbix 7.0 監視ラボ構成をコード化した Terr
 
 > このリポジトリは学習・検証用途です。デフォルトでは NAT Gateway、EC2、CloudWatch 監視リソースを作成しません。
 
-## Validation status
+## 検証状況
 
-| Check | Status |
+| 確認項目 | 状態 |
 |---|---|
 | `terraform fmt -check -recursive` | CIで確認済み |
 | `terraform validate` | CIで確認済み |
@@ -17,41 +17,41 @@ Amazon Linux 2023 上の Zabbix 7.0 監視ラボ構成をコード化した Terr
 | `terraform plan` | 未実施 |
 | `terraform apply` / Zabbix動作確認 | 未実施 |
 
-## Architecture
+## 構成図
 
 ```mermaid
 flowchart TB
-    Admin[Administrator] -->|HTTP 80| Server[Zabbix Server<br/>public-a]
+    Admin[管理者] -->|HTTP 80| Server[Zabbix Server<br/>public-a]
     Server -->|10050 / ICMP| AgentA[Agent<br/>private-a]
     Server -->|10050 / ICMP| AgentB[Agent<br/>public-b]
     Server -->|10050 / ICMP| AgentC[Agent<br/>private-b]
-    AgentA -->|10051 active checks| Server
-    AgentB -->|10051 active checks| Server
-    AgentC -->|10051 active checks| Server
-    Server -. logs / metrics .-> CW[CloudWatch / SNS]
-    AgentA -. outbound .-> NAT[NAT Gateway<br/>optional]
-    AgentC -. outbound .-> NAT
+    AgentA -->|10051 アクティブチェック| Server
+    AgentB -->|10051 アクティブチェック| Server
+    AgentC -->|10051 アクティブチェック| Server
+    Server -. ログ / メトリクス .-> CW[CloudWatch / SNS]
+    AgentA -. アウトバウンド .-> NAT[NAT Gateway<br/>任意]
+    AgentC -. アウトバウンド .-> NAT
 ```
 
-- Public subnets: Internet Gateway 経由でインターネットへ接続
-- Private subnets: 1台の NAT Gateway 経由でアウトバウンド通信
-- EC2 management: AWS Systems Manager Session Manager
+- Publicサブネット: Internet Gateway経由でインターネットへ接続
+- Privateサブネット: 1台のNAT Gateway経由でアウトバウンド通信
+- EC2管理: AWS Systems Manager Session Manager
 - Zabbix Server: MariaDB、Apache/PHP、Zabbix Server、Zabbix Agent 2
-- Monitored hosts: Zabbix Agent 2
-- CloudWatch Agent: memory、root disk、Apache/Zabbix logs
+- 監視対象ホスト: Zabbix Agent 2
+- CloudWatch Agent: メモリ、ルートディスク、Apache/Zabbixログ
 
-## Security-group flow
+## セキュリティグループの通信経路
 
-| Destination | Protocol/port | Source | Purpose |
+| 宛先 | プロトコル/ポート | 送信元 | 用途 |
 |---|---:|---|---|
-| Zabbix Server | TCP 80 | `admin_cidr` only | Web console |
-| Zabbix Server | TCP 10051 | Agent security group | Active checks/trapper |
-| Agents | TCP 10050 | Server security group | Passive checks |
-| Agents | ICMP | Server security group | Availability checks |
+| Zabbix Server | TCP 80 | `admin_cidr`のみ | Webコンソール |
+| Zabbix Server | TCP 10051 | Agent用SG | アクティブチェック/トラッパー |
+| Agents | TCP 10050 | Server用SG | パッシブチェック |
+| Agents | ICMP | Server用SG | 稼働確認 |
 
-SSH port 22 is not opened. Use Session Manager for administration.
+SSHポート22は開放せず、管理にはSession Managerを使用します。
 
-## Project structure
+## ディレクトリ構成
 
 ```text
 .
@@ -77,7 +77,7 @@ SSH port 22 is not opened. Use Session Manager for administration.
     └── zabbix-agent.sh.tftpl
 ```
 
-## Reference
+## Terraformリファレンス
 
 各モジュールの詳細な入出力は `modules/<name>/README.md` を参照してください（`terraform-docs` で自動生成、Makefile の `make docs` で更新可能）。
 
@@ -172,45 +172,45 @@ SSH port 22 is not opened. Use Session Manager for administration.
 | <a name="output_zabbix_web_url"></a> [zabbix\_web\_url](#output\_zabbix\_web\_url) | URL of the Zabbix web interface, or null when disabled |
 <!-- END_TF_DOCS -->
 
-## Prerequisites
+## 前提条件
 
-- Terraform 1.10 or later
+- Terraform 1.10以降
 - AWS CLI v2
-- An AWS identity with permission to create the resources in this project
-- AWS CLI credentials configured outside the repository
+- 本プロジェクトのリソースを作成できるAWS権限
+- リポジトリ外で設定したAWS CLI認証情報
 
-Confirm the active AWS identity before planning:
+plan実行前に、利用中のAWS Identityを確認します。
 
 ```powershell
 aws sts get-caller-identity
 ```
 
-## Configuration
+## 設定
 
-Copy the example variables file:
+変数ファイルのサンプルをコピーします。
 
 ```powershell
 Copy-Item .\terraform.tfvars.example .\terraform.tfvars
 ```
 
-Find your current public IPv4 address:
+現在のパブリックIPv4アドレスを確認します。
 
 ```powershell
 (Invoke-RestMethod -Uri "https://checkip.amazonaws.com").Trim()
 ```
 
-Edit `terraform.tfvars` and replace both example values:
+`terraform.tfvars` を編集し、2つのサンプル値を置き換えます。
 
 ```hcl
 admin_cidr        = "YOUR_PUBLIC_IP/32"
 zabbix_db_password = "A_PRIVATE_PASSWORD"
 ```
 
-`terraform.tfvars` is excluded by `.gitignore`. Do not commit passwords, access keys, state files, or saved plan files.
+`terraform.tfvars` は `.gitignore` の対象です。パスワード、アクセスキー、stateファイル、保存済みplanファイルはコミットしないでください。
 
-## Safe validation
+## 安全な検証手順
 
-The example configuration keeps paid components disabled:
+サンプル設定では、課金が発生する主なコンポーネントを無効にしています。
 
 ```hcl
 enable_nat_gateway   = false
@@ -218,7 +218,7 @@ create_ec2_instances = false
 enable_monitoring    = false
 ```
 
-Run:
+次のコマンドを実行します。
 
 ```powershell
 terraform init
@@ -227,37 +227,37 @@ terraform validate
 terraform plan -out=tfplan
 ```
 
-Inspect the complete plan. Do not apply it until the resource count and settings are understood.
+planの内容をすべて確認し、リソース数と設定を理解するまではapplyしないでください。
 
-## Linting & documentation
+## 静的解析とドキュメント
 
-This repo uses [tflint](https://github.com/terraform-linters/tflint) (with the `aws` ruleset) for static analysis and [terraform-docs](https://github.com/terraform-docs/terraform-docs) to keep each module's README in sync with its actual variables/outputs. Both run in CI (`.github/workflows/terraform.yml`) on every push and PR.
+静的解析には [tflint](https://github.com/terraform-linters/tflint)（`aws` ruleset）、各モジュールのREADME同期には [terraform-docs](https://github.com/terraform-docs/terraform-docs) を使用します。pushおよびpull requestのたびにCI（`.github/workflows/terraform.yml`）で実行されます。
 
 ```bash
-# one-time: download the tflint-ruleset-aws plugin declared in .tflint.hcl
+# 初回のみ: .tflint.hclで指定したプラグインを取得
 make lint-init
 
-# static analysis (mirrors the CI "lint" job)
+# 静的解析（CIのlintジョブと同じ）
 make lint
 
-# regenerate modules/*/README.md and the root README's Requirements/Providers/Modules/Resources/Inputs/Outputs tables
+# モジュールREADMEとルートREADMEのTerraformリファレンスを再生成
 make docs
 ```
 
-**Windows note:** vanilla Git Bash doesn't ship `make`. Install it (`choco install make` or `scoop install make`), or run the underlying commands directly instead of via `make`:
+**Windows向け補足:** 標準のGit Bashには `make` が含まれていません。`choco install make` または `scoop install make` で導入するか、次のコマンドを直接実行してください。
 
 ```powershell
-tflint --init                                    # once, after editing .tflint.hcl
-tflint --recursive --format compact              # lint
-terraform-docs -c .terraform-docs.yml modules/network   # regenerate one module's README (repeat per module)
-terraform-docs -c .terraform-docs-root.yml .             # regenerate the root README
+tflint --init                                    # 初回のみ
+tflint --recursive --format compact              # 静的解析
+terraform-docs -c .terraform-docs.yml modules/network   # モジュールREADMEを再生成
+terraform-docs -c .terraform-docs-root.yml .             # ルートREADMEを再生成
 ```
 
-If you change a module's `variables.tf` or `outputs.tf` without regenerating docs, the CI `docs` job will fail with a diff — that's the intended signal to run `make docs` (or the commands above) before pushing.
+モジュールの `variables.tf` または `outputs.tf` を変更した場合は、push前に `make docs`（または上記コマンド）を実行してください。未実行の場合、CIの `docs` ジョブが差分を検知します。
 
-## Deploy the complete lab
+## ラボ全体のデプロイ
 
-Private instances require outbound access during bootstrap. Enable all three switches in `terraform.tfvars`:
+Privateサブネットのインスタンスは、初期構築時にアウトバウンド通信が必要です。`terraform.tfvars` で次の3項目を有効にします。
 
 ```hcl
 enable_nat_gateway   = true
@@ -265,79 +265,79 @@ create_ec2_instances = true
 enable_monitoring    = true
 ```
 
-Optionally configure email notifications:
+必要に応じてメール通知を設定します。
 
 ```hcl
 alarm_email = "your-address@example.com"
 ```
 
-Then create and apply a fresh saved plan:
+新しいplanを作成し、内容を確認してapplyします。
 
 ```powershell
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-If an email address was configured, confirm the SNS subscription from the email sent by AWS.
+メールアドレスを設定した場合は、AWSから届くメールでSNSサブスクリプションを承認してください。
 
-After EC2 user-data finishes, obtain the URL:
+EC2のUser Data実行完了後、ZabbixのURLを取得します。
 
 ```powershell
 terraform output -raw zabbix_web_url
 ```
 
-The bootstrap log is available on the server through Session Manager:
+初期構築ログはSession Managerでサーバーへ接続して確認できます。
 
 ```bash
 sudo tail -f /var/log/user-data-zabbix-server.log
 ```
 
-## CloudWatch metrics and logs
+## CloudWatchメトリクスとログ
 
-Custom metrics use the `CWAgent` namespace:
+カスタムメトリクスは `CWAgent` namespaceを使用します。
 
 - `mem_used_percent`
 - `disk_used_percent` with `path=/` and `fstype=xfs`
 
-Log groups:
+ロググループ:
 
 - `/<project_name>/zabbix-server/httpd/access`
 - `/<project_name>/zabbix-server/httpd/error`
 - `/<project_name>/zabbix-server/zabbix/server`
 
-Two alarms are created for the Zabbix server with an 80% default threshold:
+Zabbix Serverには、デフォルト閾値80%で2つのアラームを作成します。
 
-- Memory usage
-- Root disk usage
+- メモリ使用率
+- ルートディスク使用率
 
-## Cost controls
+## コスト管理
 
-Resources that may incur charges include:
+主に次のリソースで料金が発生します。
 
-- NAT Gateway and its data processing
-- EC2 instances
-- EBS volumes
-- Public IPv4 addresses
-- EC2 detailed monitoring when enabled
-- CloudWatch custom metrics, logs, and alarms
-- SNS notifications
+- NAT Gatewayとデータ処理
+- EC2インスタンス
+- EBSボリューム
+- パブリックIPv4アドレス
+- EC2詳細モニタリング（有効時）
+- CloudWatchカスタムメトリクス、ログ、アラーム
+- SNS通知
 
-To pause paid lab components while retaining the base network, set the three switches to `false`, run `terraform plan`, review the planned deletions, and then apply. To remove everything:
+ネットワークを残して課金対象を停止する場合は、3つのスイッチを `false` に変更し、`terraform plan` で削除対象を確認してからapplyします。すべて削除する場合は次を実行します。
 
 ```powershell
 terraform plan -destroy -out=destroy.tfplan
 terraform apply destroy.tfplan
 ```
 
-## Important limitations
+## 重要な制約
 
 - 実AWS環境への `terraform plan` / `apply` とZabbixの機能試験はまだ行っていません。
-- A single NAT Gateway is used to reduce lab cost; this is not a production-grade multi-AZ egress design.
-- MariaDB runs on the Zabbix server EC2 instance; production deployments should use a managed, backed-up database.
-- HTTP is restricted to one administrator IP but is not encrypted. Production deployments should use HTTPS and an appropriate ingress design.
-- The database password is rendered into EC2 user data and Terraform state. Store state securely and use Secrets Manager or SSM Parameter Store in production.
-- The newest Amazon Linux 2023 AMI is resolved during planning, while instance lifecycle settings avoid automatic replacement solely due to a later AMI release.
+- コストを抑えるためNAT Gatewayは1台のみです。本番向けのマルチAZアウトバウンド構成ではありません。
+- MariaDBはZabbix ServerのEC2上で稼働します。本番環境ではバックアップを備えたマネージドデータベースを検討してください。
+- HTTP接続元は管理者IPのみに制限していますが、通信は暗号化されません。本番環境ではHTTPSと適切なIngress設計が必要です。
+- DBパスワードはEC2 User DataとTerraform stateに保存されます。stateを安全に管理し、本番環境ではSecrets ManagerまたはSSM Parameter Storeを検討してください。
+- plan時点で最新のAmazon Linux 2023 AMIを取得しますが、新AMIの公開だけを理由に既存インスタンスが自動置換されないライフサイクル設定です。
 
-## License
+## ライセンス
 
-MIT License. See [LICENSE](LICENSE).
+MIT Licenseです。詳細は [LICENSE](LICENSE) を参照してください。
