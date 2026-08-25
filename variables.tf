@@ -128,8 +128,8 @@ variable "agent_private_ips" {
   }
 
   validation {
-    condition = setequals(
-      toset(keys(var.agent_private_ips)),
+    condition = (
+      toset(keys(var.agent_private_ips)) ==
       toset(["public-b", "private-a", "private-b"])
     )
     error_message = "agent_private_ips must contain public-b, private-a, and private-b."
