@@ -1,24 +1,36 @@
 # Zabbix Lab on AWS with Terraform
 
-Amazon Linux 2023 上に Zabbix 7.0 の検証環境を構築する Terraform プロジェクトです。VPC、4つのサブネット、NAT Gateway、セキュリティグループ、IAM、EC2、CloudWatch Logs、メモリ・ディスク使用率アラームをモジュール単位で管理します。
+[![Terraform CI](https://github.com/ABFishyang/terraform-zbx-lab/actions/workflows/terraform.yml/badge.svg)](https://github.com/ABFishyang/terraform-zbx-lab/actions/workflows/terraform.yml)
+
+Amazon Linux 2023 上の Zabbix 7.0 監視ラボ構成をコード化した Terraform プロジェクトです。VPC、4つのサブネット、NAT Gateway、セキュリティグループ、IAM、EC2、CloudWatch Logs、メモリ・ディスク使用率アラームをモジュール単位で管理します。
 
 > このリポジトリは学習・検証用途です。デフォルトでは NAT Gateway、EC2、CloudWatch 監視リソースを作成しません。
 
+## Validation status
+
+| Check | Status |
+|---|---|
+| `terraform fmt -check -recursive` | CIで確認済み |
+| `terraform validate` | CIで確認済み |
+| TFLint | CIで確認済み |
+| terraform-docs同期 | CIで確認済み |
+| `terraform plan` | 未実施 |
+| `terraform apply` / Zabbix動作確認 | 未実施 |
+
 ## Architecture
 
-```text
-VPC 10.1.0.0/16
-├── ap-northeast-1a
-│   ├── public-a  10.1.0.0/24
-│   │   ├── Zabbix Server 10.1.0.10
-│   │   └── NAT Gateway (optional)
-│   └── private-a 10.1.1.0/24
-│       └── Zabbix Agent 10.1.1.10
-└── ap-northeast-1c
-    ├── public-b  10.1.2.0/24
-    │   └── Zabbix Agent 10.1.2.10
-    └── private-b 10.1.3.0/24
-        └── Zabbix Agent 10.1.3.10
+```mermaid
+flowchart TB
+    Admin[Administrator] -->|HTTP 80| Server[Zabbix Server<br/>public-a]
+    Server -->|10050 / ICMP| AgentA[Agent<br/>private-a]
+    Server -->|10050 / ICMP| AgentB[Agent<br/>public-b]
+    Server -->|10050 / ICMP| AgentC[Agent<br/>private-b]
+    AgentA -->|10051 active checks| Server
+    AgentB -->|10051 active checks| Server
+    AgentC -->|10051 active checks| Server
+    Server -. logs / metrics .-> CW[CloudWatch / SNS]
+    AgentA -. outbound .-> NAT[NAT Gateway<br/>optional]
+    AgentC -. outbound .-> NAT
 ```
 
 - Public subnets: Internet Gateway 経由でインターネットへ接続
@@ -319,6 +331,7 @@ terraform apply destroy.tfplan
 
 ## Important limitations
 
+- 実AWS環境への `terraform plan` / `apply` とZabbixの機能試験はまだ行っていません。
 - A single NAT Gateway is used to reduce lab cost; this is not a production-grade multi-AZ egress design.
 - MariaDB runs on the Zabbix server EC2 instance; production deployments should use a managed, backed-up database.
 - HTTP is restricted to one administrator IP but is not encrypted. Production deployments should use HTTPS and an appropriate ingress design.
