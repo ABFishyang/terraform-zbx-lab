@@ -1,0 +1,729 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Zabbix 7.0 monitoring lab on Amazon Linux 2023
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: zbx-cfn-lab
+    AllowedPattern: "^[a-z0-9-]{3,24}$"
+    ConstraintDescription: Use 3-24 lowercase letters, numbers, or hyphens.
+  AdminCidr:
+    Type: String
+    AllowedPattern: "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/32$"
+    ConstraintDescription: Specify one administrator IPv4 address with /32.
+  VpcCidr:
+    Type: String
+    Default: 10.1.0.0/16
+  AvailabilityZoneA:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-northeast-1a
+  AvailabilityZoneB:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-northeast-1c
+  PublicSubnetACidr:
+    Type: String
+    Default: 10.1.0.0/24
+  PrivateSubnetACidr:
+    Type: String
+    Default: 10.1.1.0/24
+  PublicSubnetBCidr:
+    Type: String
+    Default: 10.1.2.0/24
+  PrivateSubnetBCidr:
+    Type: String
+    Default: 10.1.3.0/24
+  EnableNatGateway:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  CreateEc2Instances:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableMonitoring:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableDetailedMonitoring:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  ServerInstanceType:
+    Type: String
+    Default: t3.small
+  AgentInstanceType:
+    Type: String
+    Default: t3.micro
+  ServerRootVolumeSize:
+    Type: Number
+    Default: 20
+    MinValue: 8
+  AgentRootVolumeSize:
+    Type: Number
+    Default: 8
+    MinValue: 8
+  ServerPrivateIp:
+    Type: String
+    Default: 10.1.0.10
+  PublicAgentPrivateIp:
+    Type: String
+    Default: 10.1.2.10
+  PrivateAgentAPrivateIp:
+    Type: String
+    Default: 10.1.1.10
+  PrivateAgentBPrivateIp:
+    Type: String
+    Default: 10.1.3.10
+  ZabbixDbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 64
+    AllowedPattern: "^[A-Za-z0-9_@#%+=.-]{8,64}$"
+  AlarmEmail:
+    Type: String
+    Default: ""
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+  MemoryAlarmThreshold:
+    Type: Number
+    Default: 80
+  DiskAlarmThreshold:
+    Type: Number
+    Default: 80
+  AlarmPeriodSeconds:
+    Type: Number
+    Default: 60
+    AllowedValues: [10, 30, 60, 300]
+  EvaluationPeriods:
+    Type: Number
+    Default: 5
+    MinValue: 1
+  DatapointsToAlarm:
+    Type: Number
+    Default: 5
+    MinValue: 1
+
+Rules:
+  InstancesRequireNat:
+    RuleCondition: !Equals [!Ref CreateEc2Instances, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref EnableNatGateway, "true"]
+        AssertDescription: EnableNatGateway must be true when EC2 instances are created.
+  MonitoringRequiresInstances:
+    RuleCondition: !Equals [!Ref EnableMonitoring, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref CreateEc2Instances, "true"]
+        AssertDescription: CreateEc2Instances must be true when monitoring is enabled.
+
+Conditions:
+  CreateNat: !Equals [!Ref EnableNatGateway, "true"]
+  CreateInstances: !Equals [!Ref CreateEc2Instances, "true"]
+  CreateMonitoring: !Equals [!Ref EnableMonitoring, "true"]
+  CreateEmailSubscription: !And
+    - !Condition CreateMonitoring
+    - !Not [!Equals [!Ref AlarmEmail, ""]]
+  DetailedMonitoringEnabled: !Equals [!Ref EnableDetailedMonitoring, "true"]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Ref AvailabilityZoneA
+      CidrBlock: !Ref PublicSubnetACidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-a
+        - Key: Tier
+          Value: public
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Ref AvailabilityZoneA
+      CidrBlock: !Ref PrivateSubnetACidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-a
+        - Key: Tier
+          Value: private
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Ref AvailabilityZoneB
+      CidrBlock: !Ref PublicSubnetBCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-b
+        - Key: Tier
+          Value: public
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Ref AvailabilityZoneB
+      CidrBlock: !Ref PrivateSubnetBCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-b
+        - Key: Tier
+          Value: private
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-rt
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-rt-a
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-rt-b
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  NatElasticIp:
+    Type: AWS::EC2::EIP
+    Condition: CreateNat
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-nat-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateNat
+    Properties:
+      AllocationId: !GetAtt NatElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-nat
+
+  PrivateDefaultRouteA:
+    Type: AWS::EC2::Route
+    Condition: CreateNat
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateDefaultRouteB:
+    Type: AWS::EC2::Route
+    Condition: CreateNat
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the Zabbix server
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-server-sg
+
+  AgentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Zabbix monitored hosts
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-agent-sg
+
+  ServerHttpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ServerSecurityGroup.GroupId
+      Description: Zabbix web interface from administrator IP
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: !Ref AdminCidr
+
+  ServerTrapperIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ServerSecurityGroup.GroupId
+      Description: Active checks and trapper data from monitored hosts
+      IpProtocol: tcp
+      FromPort: 10051
+      ToPort: 10051
+      SourceSecurityGroupId: !GetAtt AgentSecurityGroup.GroupId
+
+  AgentPassiveIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt AgentSecurityGroup.GroupId
+      Description: Passive checks from the Zabbix server
+      IpProtocol: tcp
+      FromPort: 10050
+      ToPort: 10050
+      SourceSecurityGroupId: !GetAtt ServerSecurityGroup.GroupId
+
+  AgentIcmpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt AgentSecurityGroup.GroupId
+      Description: ICMP checks from the Zabbix server
+      IpProtocol: icmp
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId: !GetAtt ServerSecurityGroup.GroupId
+
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-ec2-role
+      Description: Allows lab instances to use Systems Manager and CloudWatch Agent
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-role
+
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ProjectName}-ec2-profile
+      Roles:
+        - !Ref Ec2Role
+
+  HttpdAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateMonitoring
+    Properties:
+      LogGroupName: !Sub /${ProjectName}/zabbix-server/httpd/access
+      RetentionInDays: !Ref LogRetentionDays
+
+  HttpdErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateMonitoring
+    Properties:
+      LogGroupName: !Sub /${ProjectName}/zabbix-server/httpd/error
+      RetentionInDays: !Ref LogRetentionDays
+
+  ZabbixServerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateMonitoring
+    Properties:
+      LogGroupName: !Sub /${ProjectName}/zabbix-server/zabbix/server
+      RetentionInDays: !Ref LogRetentionDays
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateMonitoring
+    Properties:
+      TopicName: !Sub ${ProjectName}-alerts
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alerts
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateEmailSubscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  ZabbixServer:
+    Type: AWS::EC2::Instance
+    Condition: CreateInstances
+    DependsOn:
+      - PrivateDefaultRouteA
+      - PrivateDefaultRouteB
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref ServerInstanceType
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      Monitoring: !If [DetailedMonitoringEnabled, true, false]
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnetA
+          PrivateIpAddress: !Ref ServerPrivateIp
+          GroupSet:
+            - !GetAtt ServerSecurityGroup.GroupId
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref ServerRootVolumeSize
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee /var/log/user-data-zabbix-server.log | logger -t user-data-zabbix-server -s 2>/dev/console) 2>&1
+          hostnamectl set-hostname "${ProjectName}-server"
+          DB_PASSWORD='${ZabbixDbPassword}'
+          ENABLE_MONITORING='${EnableMonitoring}'
+          dnf update -y
+          dnf install -y curl mariadb1011-server
+          curl --fail --location --retry 5 --retry-delay 5 --output /tmp/zabbix-release.rpm https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/x86_64/zabbix-release-latest-7.0.amzn2023.noarch.rpm
+          rpm -Uvh /tmp/zabbix-release.rpm || rpm -Uvh --replacepkgs /tmp/zabbix-release.rpm
+          dnf clean all
+          dnf install -y zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf fping zabbix-sql-scripts zabbix-selinux-policy zabbix-agent2
+          setsebool -P httpd_can_connect_zabbix on
+          systemctl enable --now mariadb
+          mariadb <<SQL
+          CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+          CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+          ALTER USER 'zabbix'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+          GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
+          SET GLOBAL log_bin_trust_function_creators = 1;
+          FLUSH PRIVILEGES;
+          SQL
+          table_count=$(mariadb --batch --skip-column-names -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='zabbix';")
+          if [ "$table_count" -eq 0 ]; then
+            zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mariadb --default-character-set=utf8mb4 --user=zabbix --password="$DB_PASSWORD" zabbix
+          fi
+          mariadb -e "SET GLOBAL log_bin_trust_function_creators = 0;"
+          sed -i -e 's/^# DBHost=.*/DBHost=localhost/' -e 's/^DBName=.*/DBName=zabbix/' -e 's/^DBUser=.*/DBUser=zabbix/' /etc/zabbix/zabbix_server.conf
+          sed -i "s/^# DBPassword=.*/DBPassword=$DB_PASSWORD/" /etc/zabbix/zabbix_server.conf
+          sed -i -e 's/^Server=.*/Server=127.0.0.1/' -e 's/^ServerActive=.*/ServerActive=127.0.0.1/' -e 's/^Hostname=.*/Hostname=Zabbix server/' /etc/zabbix/zabbix_agent2.conf
+          if grep -q '^# php_value date.timezone' /etc/httpd/conf.d/zabbix.conf; then sed -i 's|^# php_value date.timezone.*|php_value date.timezone Asia/Tokyo|' /etc/httpd/conf.d/zabbix.conf; fi
+          mkdir -p /etc/zabbix/web
+          cat > /etc/zabbix/web/zabbix.conf.php <<PHP
+          <?php
+          \$DB['TYPE'] = 'MYSQL';
+          \$DB['SERVER'] = 'localhost';
+          \$DB['PORT'] = '0';
+          \$DB['DATABASE'] = 'zabbix';
+          \$DB['USER'] = 'zabbix';
+          \$DB['PASSWORD'] = '$DB_PASSWORD';
+          \$ZBX_SERVER = 'localhost';
+          \$ZBX_SERVER_PORT = '10051';
+          \$ZBX_SERVER_NAME = '${ProjectName}';
+          \$IMAGE_FORMAT_DEFAULT = IMAGE_FORMAT_PNG;
+          PHP
+          httpd -t
+          systemctl enable --now zabbix-server zabbix-agent2 httpd php-fpm
+          if [ "$ENABLE_MONITORING" = "true" ]; then
+            dnf install -y amazon-cloudwatch-agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<JSON
+          {
+            "agent": {"metrics_collection_interval": 60, "run_as_user": "root"},
+            "metrics": {
+              "namespace": "CWAgent",
+              "append_dimensions": {"InstanceId": "${!aws:InstanceId}"},
+              "aggregation_dimensions": [["InstanceId"]],
+              "metrics_collected": {
+                "mem": {"measurement": ["mem_used_percent"], "metrics_collection_interval": 60},
+                "disk": {"measurement": ["used_percent"], "metrics_collection_interval": 60, "resources": ["/"], "drop_device": true}
+              }
+            },
+            "logs": {"logs_collected": {"files": {"collect_list": [
+              {"file_path": "/var/log/httpd/access_log", "log_group_name": "/${ProjectName}/zabbix-server/httpd/access", "log_stream_name": "{instance_id}"},
+              {"file_path": "/var/log/httpd/error_log", "log_group_name": "/${ProjectName}/zabbix-server/httpd/error", "log_stream_name": "{instance_id}"},
+              {"file_path": "/var/log/zabbix/zabbix_server.log", "log_group_name": "/${ProjectName}/zabbix-server/zabbix/server", "log_stream_name": "{instance_id}"}
+            ]}}}
+          }
+          JSON
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+          fi
+          touch /var/log/zabbix-bootstrap-complete
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-server
+        - Key: Role
+          Value: zabbix-server
+
+  PublicAgent:
+    Type: AWS::EC2::Instance
+    Condition: CreateInstances
+    DependsOn: ZabbixServer
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref AgentInstanceType
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      Monitoring: !If [DetailedMonitoringEnabled, true, false]
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnetB
+          PrivateIpAddress: !Ref PublicAgentPrivateIp
+          GroupSet: [!GetAtt AgentSecurityGroup.GroupId]
+      MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeType: gp3, VolumeSize: !Ref AgentRootVolumeSize, Encrypted: true, DeleteOnTermination: true}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          hostnamectl set-hostname "${ProjectName}-agent-public-b"
+          dnf install -y curl
+          curl --fail --location --retry 5 --retry-delay 5 --output /tmp/zabbix-release.rpm https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/x86_64/zabbix-release-latest-7.0.amzn2023.noarch.rpm
+          rpm -Uvh /tmp/zabbix-release.rpm || rpm -Uvh --replacepkgs /tmp/zabbix-release.rpm
+          dnf clean all && dnf install -y zabbix-agent2
+          sed -i -e 's/^Server=.*/Server=${ServerPrivateIp}/' -e 's/^ServerActive=.*/ServerActive=${ServerPrivateIp}/' -e 's/^Hostname=.*/Hostname=${ProjectName}-agent-public-b/' /etc/zabbix/zabbix_agent2.conf
+          systemctl enable --now zabbix-agent2
+      Tags:
+        - {Key: Name, Value: !Sub '${ProjectName}-agent-public-b'}
+        - {Key: Role, Value: zabbix-agent}
+
+  PrivateAgentA:
+    Type: AWS::EC2::Instance
+    Condition: CreateInstances
+    DependsOn: ZabbixServer
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref AgentInstanceType
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      Monitoring: !If [DetailedMonitoringEnabled, true, false]
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          SubnetId: !Ref PrivateSubnetA
+          PrivateIpAddress: !Ref PrivateAgentAPrivateIp
+          GroupSet: [!GetAtt AgentSecurityGroup.GroupId]
+      MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeType: gp3, VolumeSize: !Ref AgentRootVolumeSize, Encrypted: true, DeleteOnTermination: true}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          hostnamectl set-hostname "${ProjectName}-agent-private-a"
+          dnf install -y curl
+          curl --fail --location --retry 5 --retry-delay 5 --output /tmp/zabbix-release.rpm https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/x86_64/zabbix-release-latest-7.0.amzn2023.noarch.rpm
+          rpm -Uvh /tmp/zabbix-release.rpm || rpm -Uvh --replacepkgs /tmp/zabbix-release.rpm
+          dnf clean all && dnf install -y zabbix-agent2
+          sed -i -e 's/^Server=.*/Server=${ServerPrivateIp}/' -e 's/^ServerActive=.*/ServerActive=${ServerPrivateIp}/' -e 's/^Hostname=.*/Hostname=${ProjectName}-agent-private-a/' /etc/zabbix/zabbix_agent2.conf
+          systemctl enable --now zabbix-agent2
+      Tags:
+        - {Key: Name, Value: !Sub '${ProjectName}-agent-private-a'}
+        - {Key: Role, Value: zabbix-agent}
+
+  PrivateAgentB:
+    Type: AWS::EC2::Instance
+    Condition: CreateInstances
+    DependsOn: ZabbixServer
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref AgentInstanceType
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      Monitoring: !If [DetailedMonitoringEnabled, true, false]
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          SubnetId: !Ref PrivateSubnetB
+          PrivateIpAddress: !Ref PrivateAgentBPrivateIp
+          GroupSet: [!GetAtt AgentSecurityGroup.GroupId]
+      MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeType: gp3, VolumeSize: !Ref AgentRootVolumeSize, Encrypted: true, DeleteOnTermination: true}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          hostnamectl set-hostname "${ProjectName}-agent-private-b"
+          dnf install -y curl
+          curl --fail --location --retry 5 --retry-delay 5 --output /tmp/zabbix-release.rpm https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/x86_64/zabbix-release-latest-7.0.amzn2023.noarch.rpm
+          rpm -Uvh /tmp/zabbix-release.rpm || rpm -Uvh --replacepkgs /tmp/zabbix-release.rpm
+          dnf clean all && dnf install -y zabbix-agent2
+          sed -i -e 's/^Server=.*/Server=${ServerPrivateIp}/' -e 's/^ServerActive=.*/ServerActive=${ServerPrivateIp}/' -e 's/^Hostname=.*/Hostname=${ProjectName}-agent-private-b/' /etc/zabbix/zabbix_agent2.conf
+          systemctl enable --now zabbix-agent2
+      Tags:
+        - {Key: Name, Value: !Sub '${ProjectName}-agent-private-b'}
+        - {Key: Role, Value: zabbix-agent}
+
+  MemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateMonitoring
+    Properties:
+      AlarmName: !Sub ${ProjectName}-server-memory-high
+      AlarmDescription: Zabbix server memory usage is above the configured threshold
+      Namespace: CWAgent
+      MetricName: mem_used_percent
+      Statistic: Average
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: !Ref EvaluationPeriods
+      DatapointsToAlarm: !Ref DatapointsToAlarm
+      Threshold: !Ref MemoryAlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref ZabbixServer
+
+  DiskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateMonitoring
+    Properties:
+      AlarmName: !Sub ${ProjectName}-server-root-disk-high
+      AlarmDescription: Zabbix server root disk usage is above the configured threshold
+      Namespace: CWAgent
+      MetricName: disk_used_percent
+      Statistic: Average
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: !Ref EvaluationPeriods
+      DatapointsToAlarm: !Ref DatapointsToAlarm
+      Threshold: !Ref DiskAlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref ZabbixServer
+        - Name: path
+          Value: /
+        - Name: fstype
+          Value: xfs
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PublicSubnetAId:
+    Value: !Ref PublicSubnetA
+  PublicSubnetBId:
+    Value: !Ref PublicSubnetB
+  PrivateSubnetAId:
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetBId:
+    Value: !Ref PrivateSubnetB
+  NatGatewayId:
+    Condition: CreateNat
+    Value: !Ref NatGateway
+  ServerSecurityGroupId:
+    Value: !GetAtt ServerSecurityGroup.GroupId
+  AgentSecurityGroupId:
+    Value: !GetAtt AgentSecurityGroup.GroupId
+  Ec2RoleName:
+    Value: !Ref Ec2Role
+  ZabbixServerInstanceId:
+    Condition: CreateInstances
+    Value: !Ref ZabbixServer
+  ZabbixServerPublicIp:
+    Condition: CreateInstances
+    Value: !GetAtt ZabbixServer.PublicIp
+  ZabbixWebUrl:
+    Condition: CreateInstances
+    Value: !Sub http://${ZabbixServer.PublicIp}/zabbix
+  PublicAgentInstanceId:
+    Condition: CreateInstances
+    Value: !Ref PublicAgent
+  PrivateAgentAInstanceId:
+    Condition: CreateInstances
+    Value: !Ref PrivateAgentA
+  PrivateAgentBInstanceId:
+    Condition: CreateInstances
+    Value: !Ref PrivateAgentB
+  AlertTopicArn:
+    Condition: CreateMonitoring
+    Value: !Ref AlertTopic
+

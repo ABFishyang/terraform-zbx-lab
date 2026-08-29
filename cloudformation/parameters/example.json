@@ -1,0 +1,20 @@
+{
+  "ProjectName": "zbx-cfn-lab",
+  "AdminCidr": "203.0.113.10/32",
+  "VpcCidr": "10.1.0.0/16",
+  "AvailabilityZoneA": "ap-northeast-1a",
+  "AvailabilityZoneB": "ap-northeast-1c",
+  "PublicSubnetACidr": "10.1.0.0/24",
+  "PrivateSubnetACidr": "10.1.1.0/24",
+  "PublicSubnetBCidr": "10.1.2.0/24",
+  "PrivateSubnetBCidr": "10.1.3.0/24",
+  "ServerPrivateIp": "10.1.0.10",
+  "PublicAgentPrivateIp": "10.1.2.10",
+  "PrivateAgentAPrivateIp": "10.1.1.10",
+  "PrivateAgentBPrivateIp": "10.1.3.10",
+  "EnableNatGateway": "false",
+  "CreateEc2Instances": "false",
+  "EnableMonitoring": "false",
+  "AlarmEmail": ""
+}
+
